@@ -10,11 +10,14 @@ package main
 // Please do not change this file.
 //
 
-import "../mr"
-import "plugin"
-import "os"
-import "fmt"
-import "log"
+import (
+	"fmt"
+	"log"
+	"os"
+	"plugin"
+
+	"github.com/kangmingtay/learn-6.824.git/src/mr"
+)
 
 func main() {
 	if len(os.Args) != 2 {

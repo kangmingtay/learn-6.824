@@ -1,18 +1,55 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
-
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"sync"
+)
 
 type Master struct {
 	// Your definitions here.
-
+	mu       sync.Mutex
+	MapState []MapTask // index represents map task number
+	NReduce  int       // read-only
 }
 
 // Your code here -- RPC handlers for the worker to call.
+
+func (m *Master) AssignTask(_ *string, reply *MapTask) error {
+	fmt.Println("Worker called RPC...")
+	// Master's state is global so need to lock
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// get idle file
+	for taskNum, task := range m.MapState {
+		if task.Progress == "idle" {
+			reply.TaskNum = taskNum
+			reply.Filename = task.Filename
+			m.MapState[taskNum].Progress = "in-progress"
+			break
+		}
+	}
+
+	m.printMapStatus()
+
+	return nil
+}
+
+func (m *Master) CompleteTask(task *MapTask, reply *int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.MapState[task.TaskNum].Progress = "completed"
+	*reply = m.NReduce
+
+	m.printMapStatus()
+
+	return nil
+}
 
 //
 // an example RPC handler.
@@ -24,6 +61,15 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+//
+// Prints status of map tasks
+//
+func (m *Master) printMapStatus() {
+	fmt.Println("===== MAP TASK STATUS =====")
+	for _, task := range m.MapState {
+		fmt.Println(task.Filename, task.Progress)
+	}
+}
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -49,7 +95,8 @@ func (m *Master) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	// Returns true when MapReduce job is completely finished
+	// Delete intermediate files after finished
 
 	return ret
 }
@@ -60,10 +107,19 @@ func (m *Master) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	m := Master{}
+	m := Master{
+		NReduce: nReduce,
+	}
+
+	for _, file := range files {
+		m.MapState = append(m.MapState, MapTask{
+			Filename: file,
+			Progress: "idle",
+		})
+	}
 
 	// Your code here.
-
+	// Divide intermediate keys into buckets for nReduce reduce tasks
 
 	m.server()
 	return &m
