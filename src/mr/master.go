@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -22,7 +23,6 @@ type Master struct {
 // Your code here -- RPC handlers for the worker to call.
 
 func (m *Master) AssignMapTask(_ *string, reply *MapTaskData) error {
-	fmt.Println("Worker called RPC...")
 	// Master's state is global so need to lock
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -52,7 +52,7 @@ func (m *Master) AssignMapTask(_ *string, reply *MapTaskData) error {
 	reply.Task = newtask
 	reply.NReduce = m.NReduce
 
-	m.printMapStatus()
+	// m.printMapStatus()
 
 	return nil
 }
@@ -167,11 +167,29 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	ret := false
+	ret := true
 
 	// Your code here.
 	// Returns true when MapReduce job is completely finished
 	// Delete intermediate files after finished
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, task := range m.ReduceState {
+		if task.Progress != "completed" {
+			ret = false
+		}
+	}
+
+	if ret {
+		pattern := "mr-tmp/tmp-*-*.txt"
+		filenames, _ := filepath.Glob(pattern)
+		for _, filename := range filenames {
+			err := os.Remove(filename)
+			if err != nil {
+				log.Fatalf("cannot remove %v: %v\n", filename, err)
+			}
+		}
+	}
 
 	return ret
 }
