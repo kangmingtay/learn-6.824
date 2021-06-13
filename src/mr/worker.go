@@ -48,62 +48,58 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the master.
 	// CallExample()
-
-	for {
+	isMapFinished := false
+	for isMapFinished != true {
 		resp := CallAssignMapTask()
 		maptask := resp.Task
 		nReduce := resp.NReduce
-		if maptask.Filename != "" {
-			file, err := os.Open(maptask.Filename)
-			defer file.Close()
-			if err != nil {
-				log.Fatalf("cannot open %v\n", maptask.Filename)
-			}
-			content, err := ioutil.ReadAll(file)
-			if err != nil {
-				log.Fatalf("cannot read %v\n", maptask.Filename)
-			}
-			maptask.Result = mapf(maptask.Filename, string(content))
+		file, err := os.Open(maptask.Filename)
+		defer file.Close()
 
-			// slice of file encoders where index is reduceTaskNum
-			var encoders []*json.Encoder
-			for i := 0; i < nReduce; i++ {
-				tmpFileName := "mr-tmp/tmp-" + strconv.Itoa(maptask.TaskNum) + "-" + strconv.Itoa(i) + ".txt"
-				// set file mode to allow RW operations
-				tmpFile, err := os.OpenFile(tmpFileName, os.O_CREATE|os.O_WRONLY, os.ModePerm)
-				if err != nil {
-					log.Fatalf("Cannot open/create file: %v\n", err)
-				}
-				defer tmpFile.Close()
-				enc := json.NewEncoder(tmpFile)
-				encoders = append(encoders, enc)
-			}
-
-			for _, kv := range maptask.Result {
-				reduceTaskNum := ihash(kv.Key) % nReduce
-				enc := encoders[reduceTaskNum]
-				if err := enc.Encode(&kv); err != nil {
-					log.Fatalf("Cannot write to file: %v\n", err)
-				}
-			}
-			CallCompleteMapTask(maptask)
-		} else {
-			// no more map tasks
-			break
+		if err != nil {
+			log.Fatalf("cannot open %v\n", maptask.Filename)
 		}
+		content, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v\n", maptask.Filename)
+		}
+		maptask.Result = mapf(maptask.Filename, string(content))
+
+		// slice of file encoders where index is reduceTaskNum
+		var encoders []*json.Encoder
+		for i := 0; i < nReduce; i++ {
+			tmpFileName := "./tmp-" + strconv.Itoa(maptask.TaskNum) + "-" + strconv.Itoa(i) + ".txt"
+			// set file mode to allow RW operations
+			tmpFile, err := os.OpenFile(tmpFileName, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+			if err != nil {
+				log.Fatalf("Cannot open/create intermediate file: %v\n", err)
+			}
+			defer tmpFile.Close()
+			enc := json.NewEncoder(tmpFile)
+			encoders = append(encoders, enc)
+		}
+
+		for _, kv := range maptask.Result {
+			reduceTaskNum := ihash(kv.Key) % nReduce
+			enc := encoders[reduceTaskNum]
+			if err := enc.Encode(&kv); err != nil {
+				log.Fatalf("Cannot write to file: %v\n", err)
+			}
+		}
+		isMapFinished = CallCompleteMapTask(maptask)
 	}
 
 	isReduceFinished := false
 	for isReduceFinished != true {
 		reducetask := CallAssignReduceTask()
-		pattern := fmt.Sprintf("mr-tmp/tmp-*-%v.txt", reducetask.TaskNum)
+		pattern := fmt.Sprintf("./tmp-*-%v.txt", reducetask.TaskNum)
 		filenames, _ := filepath.Glob(pattern)
 		var intermediate []KeyValue
 		for _, p := range filenames {
 			file, err := os.Open(p)
 			defer file.Close()
 			if err != nil {
-				log.Fatalf("cannot open %v\n", p)
+				log.Fatalf("cannot open reduce %v\n", p)
 			}
 			dec := json.NewDecoder(file)
 			for {
@@ -115,7 +111,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 		}
 		sort.Sort(ByKey(intermediate))
-		oname := "mr-tmp/mr-out-" + strconv.Itoa(reducetask.TaskNum)
+		oname := "./mr-out-" + strconv.Itoa(reducetask.TaskNum)
 		ofile, _ := os.Create(oname)
 		defer ofile.Close()
 		i := 0
@@ -153,11 +149,12 @@ func CallAssignMapTask() MapTaskData {
 //
 // Tell master that current map task is completed
 //
-func CallCompleteMapTask(task MapTask) {
-	var reply string
+func CallCompleteMapTask(task MapTask) bool {
+	var reply bool
 	if ok := call("Master.CompleteMapTask", &task, &reply); !ok {
 		log.Fatalln("Error running map task")
 	}
+	return reply
 }
 
 //
