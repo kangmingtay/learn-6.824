@@ -9,6 +9,7 @@ package mr
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 //
@@ -26,10 +27,22 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 type MapTask struct {
-	TaskNum  int
-	Filename string
-	Result   []KeyValue
-	Progress string // idle, in-progress, completed
+	TaskNum   int
+	Filename  string
+	Result    []KeyValue
+	Progress  string // idle, in-progress, completed
+	StartedAt time.Time
+}
+
+type MapTaskData struct {
+	Task    MapTask
+	NReduce int
+}
+
+type ReduceTask struct {
+	TaskNum   int
+	Progress  string // idle, in-progress, completed
+	StartedAt time.Time
 }
 
 // Cook up a unique-ish UNIX-domain socket name
