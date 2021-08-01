@@ -29,25 +29,33 @@ func (m *Master) AssignMapTask(_ *string, reply *MapTaskData) error {
 
 	var newtask MapTask
 	// get idle file
-	currentTime := time.Now()
-	for taskNum, task := range m.MapState {
+	for i, task := range m.MapState {
 		// need to handle case where worker crash but task is still "in-progress"
-		if task.Progress == "in-progress" {
-			if duration := task.StartedAt.Add(time.Duration(10) * time.Second); duration.After(currentTime) {
-				// reset task progress
-				m.MapState[taskNum].Progress = "idle"
-			}
-		}
+		// if task.Progress == "in-progress" {
+		// 	currentTime := time.Now()
+		// 	if duration := task.StartedAt.Add(time.Duration(10) * time.Second); currentTime.After(duration) {
+		// 		// reset task progress
+		// 		// log.Printf("[Master] Reassign task: %v\n", task.Filename)
+		// 		// log.Printf("[Master] Timings: %v, %v, %v\n", task.StartedAt, duration, currentTime)
+		// 		m.MapState[i].Progress = "idle"
+		// 	}
+		// }
 
 		if task.Progress == "idle" {
-			newtask.TaskNum = taskNum
+			newtask.TaskNum = task.TaskNum
 			newtask.Filename = task.Filename
 			newtask.Progress = "in-progress"
 			newtask.StartedAt = time.Now()
-			m.MapState[taskNum].StartedAt = newtask.StartedAt
-			m.MapState[taskNum].Progress = "in-progress"
+			m.MapState[i].StartedAt = newtask.StartedAt
+			m.MapState[i].Progress = "in-progress"
 			break
 		}
+	}
+
+	if newtask.Filename == "" {
+		// all tasks have been assigned already
+		log.Println("[Master] All tasks are assigned.")
+		newtask.TaskNum = -1
 	}
 	reply.Task = newtask
 	reply.NReduce = m.NReduce
@@ -57,12 +65,28 @@ func (m *Master) AssignMapTask(_ *string, reply *MapTaskData) error {
 	return nil
 }
 
-func (m *Master) CompleteMapTask(task *MapTask, s *string) error {
+func (m *Master) CompleteMapTask(task *MapTask, reply *bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.MapState[task.TaskNum].Progress = "completed"
 
-	m.printMapStatus()
+	// need to check if worker completed task on time
+	// if worker did not, then do not set progress to completed
+
+	if task.TaskNum != -1 {
+		// worker was assigned an empty task
+		m.MapState[task.TaskNum].Progress = "completed"
+	}
+
+	isMapFinished := true
+	for _, task := range m.MapState {
+		if task.Progress != "completed" {
+			isMapFinished = false
+			break
+		}
+	}
+	*reply = isMapFinished
+
+	// m.printMapStatus()
 
 	return nil
 }
@@ -75,16 +99,33 @@ func (m *Master) AssignReduceTask(_ *string, reply *ReduceTask) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	var newtask ReduceTask
 	for taskNum, task := range m.ReduceState {
+		// currentTime := time.Now()
+		// if task.Progress == "in-progress" {
+		// 	if duration := task.StartedAt.Add(time.Duration(10) * time.Second); currentTime.After(duration) {
+		// 		// reset task progress
+		// 		m.ReduceState[taskNum].Progress = "idle"
+		// 	}
+		// }
 		if task.Progress == "idle" {
-			reply.TaskNum = taskNum
-			reply.Progress = "in-progress"
-			reply.StartedAt = time.Now()
-			m.ReduceState[taskNum].StartedAt = reply.StartedAt
+			newtask.TaskNum = taskNum
+			newtask.Progress = "in-progress"
+			newtask.StartedAt = time.Now()
+			m.ReduceState[taskNum].StartedAt = newtask.StartedAt
 			m.ReduceState[taskNum].Progress = "in-progress"
 			break
 		}
 	}
+
+	if newtask.Progress == "" {
+		newtask.TaskNum = -1
+	}
+
+	reply.TaskNum = newtask.TaskNum
+	reply.Progress = newtask.Progress
+	reply.StartedAt = newtask.StartedAt
 
 	return nil
 }
@@ -92,7 +133,13 @@ func (m *Master) AssignReduceTask(_ *string, reply *ReduceTask) error {
 func (m *Master) CompleteReduceTask(task *ReduceTask, reply *bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ReduceState[task.TaskNum].Progress = "completed"
+
+	// need to check if worker completed task on time
+	// if worker did not, then do not set progress to completed
+
+	if task.TaskNum != -1 {
+		m.ReduceState[task.TaskNum].Progress = "completed"
+	}
 
 	isReduceFinished := true
 	for _, task := range m.ReduceState {
@@ -103,7 +150,7 @@ func (m *Master) CompleteReduceTask(task *ReduceTask, reply *bool) error {
 	}
 	*reply = isReduceFinished
 
-	m.printReduceStatus()
+	// m.printReduceStatus()
 	return nil
 }
 
@@ -177,11 +224,12 @@ func (m *Master) Done() bool {
 	for _, task := range m.ReduceState {
 		if task.Progress != "completed" {
 			ret = false
+			break
 		}
 	}
 
 	if ret {
-		pattern := "mr-tmp/tmp-*-*.txt"
+		pattern := "./tmp-*-*.txt"
 		filenames, _ := filepath.Glob(pattern)
 		for _, filename := range filenames {
 			err := os.Remove(filename)
@@ -205,8 +253,9 @@ func MakeMaster(files []string, nReduce int) *Master {
 		NReduce: nReduce,
 	}
 
-	for _, file := range files {
+	for taskNum, file := range files {
 		m.MapState = append(m.MapState, MapTask{
+			TaskNum:  taskNum,
 			Filename: file,
 			Progress: "idle",
 		})

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 )
 
 //
@@ -53,82 +54,99 @@ func Worker(mapf func(string, string) []KeyValue,
 		resp := CallAssignMapTask()
 		maptask := resp.Task
 		nReduce := resp.NReduce
-		file, err := os.Open(maptask.Filename)
-		defer file.Close()
 
-		if err != nil {
-			log.Fatalf("cannot open %v\n", maptask.Filename)
-		}
-		content, err := ioutil.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v\n", maptask.Filename)
-		}
-		maptask.Result = mapf(maptask.Filename, string(content))
+		if maptask.TaskNum != -1 {
+			file, err := os.Open(maptask.Filename)
+			defer file.Close()
 
-		// slice of file encoders where index is reduceTaskNum
-		var encoders []*json.Encoder
-		for i := 0; i < nReduce; i++ {
-			tmpFileName := "./tmp-" + strconv.Itoa(maptask.TaskNum) + "-" + strconv.Itoa(i) + ".txt"
-			// set file mode to allow RW operations
-			tmpFile, err := os.OpenFile(tmpFileName, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+			log.Printf("[Worker %v] Starting on map task: %+v\n", os.Getpid(), maptask.Filename)
 			if err != nil {
-				log.Fatalf("Cannot open/create intermediate file: %v\n", err)
+				log.Fatalf("cannot open map file %v\n", err)
 			}
-			defer tmpFile.Close()
-			enc := json.NewEncoder(tmpFile)
-			encoders = append(encoders, enc)
+			content, err := ioutil.ReadAll(file)
+			if err != nil {
+				log.Fatalf("cannot read %v\n", maptask.Filename)
+			}
+			maptask.Result = mapf(maptask.Filename, string(content))
+
+			// slice of file encoders where index is reduceTaskNum
+			var encoders []*json.Encoder
+			for i := 0; i < nReduce; i++ {
+				tmpFileName := "./tmp-" + strconv.Itoa(maptask.TaskNum) + "-" + strconv.Itoa(i) + ".txt"
+				// set file mode to allow RW operations
+				tmpFile, err := os.OpenFile(tmpFileName, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+				if err != nil {
+					log.Fatalf("Cannot open/create intermediate file: %v\n", err)
+				}
+				defer tmpFile.Close()
+				enc := json.NewEncoder(tmpFile)
+				encoders = append(encoders, enc)
+			}
+
+			for _, kv := range maptask.Result {
+				reduceTaskNum := ihash(kv.Key) % nReduce
+				enc := encoders[reduceTaskNum]
+				if err := enc.Encode(&kv); err != nil {
+					log.Fatalf("Cannot write to file: %v\n", err)
+				}
+			}
+		} else {
+			log.Printf("[Worker %v] Waiting for other workers to finish...\n", os.Getpid())
+			time.Sleep(1 * time.Second)
 		}
 
-		for _, kv := range maptask.Result {
-			reduceTaskNum := ihash(kv.Key) % nReduce
-			enc := encoders[reduceTaskNum]
-			if err := enc.Encode(&kv); err != nil {
-				log.Fatalf("Cannot write to file: %v\n", err)
-			}
-		}
 		isMapFinished = CallCompleteMapTask(maptask)
 	}
 
 	isReduceFinished := false
 	for isReduceFinished != true {
 		reducetask := CallAssignReduceTask()
-		pattern := fmt.Sprintf("./tmp-*-%v.txt", reducetask.TaskNum)
-		filenames, _ := filepath.Glob(pattern)
-		var intermediate []KeyValue
-		for _, p := range filenames {
-			file, err := os.Open(p)
-			defer file.Close()
-			if err != nil {
-				log.Fatalf("cannot open reduce %v\n", p)
-			}
-			dec := json.NewDecoder(file)
-			for {
-				var kv KeyValue
-				if err := dec.Decode(&kv); err != nil {
-					break
-				}
-				intermediate = append(intermediate, kv)
-			}
-		}
-		sort.Sort(ByKey(intermediate))
-		oname := "./mr-out-" + strconv.Itoa(reducetask.TaskNum)
-		ofile, _ := os.Create(oname)
-		defer ofile.Close()
-		i := 0
-		for i < len(intermediate) {
-			j := i + 1
-			for j < len(intermediate) && intermediate[i].Key == intermediate[j].Key {
-				j++
-			}
-			values := []string{}
-			for k := i; k < j; k++ {
-				values = append(values, intermediate[i].Key)
-			}
-			output := reducef(intermediate[i].Key, values)
-			fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
 
-			i = j
+		if reducetask.TaskNum != -1 {
+			log.Printf("[Worker %v] Starting on reduce task: %+v\n", os.Getpid(), reducetask)
+			pattern := fmt.Sprintf("./tmp-*-%v.txt", reducetask.TaskNum)
+			filenames, _ := filepath.Glob(pattern)
+			var intermediate []KeyValue
+			for _, p := range filenames {
+				file, err := os.Open(p)
+				defer file.Close()
+				if err != nil {
+					log.Fatalf("cannot open reduce %v\n", p)
+				}
+				dec := json.NewDecoder(file)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					intermediate = append(intermediate, kv)
+				}
+			}
+			sort.Sort(ByKey(intermediate))
+			oname := "./mr-out-" + strconv.Itoa(reducetask.TaskNum)
+			ofile, _ := os.Create(oname)
+			defer ofile.Close()
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[i].Key == intermediate[j].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+
+				output := reducef(intermediate[i].Key, values)
+				fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+				i = j
+			}
+		} else {
+			log.Printf("[Worker %v] Waiting for other workers to finish...\n", os.Getpid())
+			time.Sleep(1 * time.Second)
 		}
+
 		isReduceFinished = CallCompleteReduceTask(reducetask)
 	}
 
