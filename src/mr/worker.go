@@ -48,7 +48,6 @@ func Worker(mapf func(string, string) []KeyValue,
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the master.
-	// CallExample()
 	isMapFinished := false
 	for isMapFinished != true {
 		resp := CallAssignMapTask()
@@ -69,26 +68,26 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			maptask.Result = mapf(maptask.Filename, string(content))
 
-			// slice of file encoders where index is reduceTaskNum
-			var encoders []*json.Encoder
-			for i := 0; i < nReduce; i++ {
-				tmpFileName := "./tmp-" + strconv.Itoa(maptask.TaskNum) + "-" + strconv.Itoa(i) + ".txt"
-				// set file mode to allow RW operations
-				tmpFile, err := os.OpenFile(tmpFileName, os.O_CREATE|os.O_WRONLY, os.ModePerm)
-				if err != nil {
-					log.Fatalf("Cannot open/create intermediate file: %v\n", err)
-				}
-				defer tmpFile.Close()
-				enc := json.NewEncoder(tmpFile)
-				encoders = append(encoders, enc)
-			}
-
+			intermediate := make(map[int][]KeyValue)
 			for _, kv := range maptask.Result {
 				reduceTaskNum := ihash(kv.Key) % nReduce
-				enc := encoders[reduceTaskNum]
-				if err := enc.Encode(&kv); err != nil {
-					log.Fatalf("Cannot write to file: %v\n", err)
+				intermediate[reduceTaskNum] = append(intermediate[reduceTaskNum], kv)
+			}
+
+			for i := 0; i < nReduce; i++ {
+				tmpFileName := "tmp-" + strconv.Itoa(maptask.TaskNum) + "-" + strconv.Itoa(i) + ".txt"
+				ifile, err := ioutil.TempFile("", tmpFileName)
+				if err != nil {
+					log.Fatalf("Cannot create ifile: %v\n", err)
 				}
+
+				enc := json.NewEncoder(ifile)
+				for _, kv := range intermediate[i] {
+					if err := enc.Encode(&kv); err != nil {
+						log.Fatalf("Cannot write to file: %v\n", err)
+					}
+				}
+				os.Rename(ifile.Name(), tmpFileName)
 			}
 		} else {
 			log.Printf("[Worker %v] Waiting for other workers to finish...\n", os.Getpid())
