@@ -30,22 +30,23 @@ func (m *Master) AssignMapTask(_ *string, reply *MapTaskData) error {
 	var newtask MapTask
 	// get idle file
 	for i, task := range m.MapState {
-		// need to handle case where worker crash but task is still "in-progress"
-		// if task.Progress == "in-progress" {
-		// 	currentTime := time.Now()
-		// 	if duration := task.StartedAt.Add(time.Duration(10) * time.Second); currentTime.After(duration) {
-		// 		// reset task progress
-		// 		// log.Printf("[Master] Reassign task: %v\n", task.Filename)
-		// 		// log.Printf("[Master] Timings: %v, %v, %v\n", task.StartedAt, duration, currentTime)
-		// 		m.MapState[i].Progress = "idle"
-		// 	}
-		// }
-
 		if task.Progress == "idle" {
 			newtask.TaskNum = task.TaskNum
 			newtask.Filename = task.Filename
 			newtask.Progress = "in-progress"
 			newtask.StartedAt = time.Now()
+
+			// need to handle case where worker crash but task is still "in-progress"
+			time.AfterFunc(10*time.Second, func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				if m.MapState[i].Progress == "in-progress" {
+					m.MapState[i].Progress = "idle"
+					log.Printf("[Master] Reassign task: %v\n", m.MapState[i].Filename)
+					return
+				}
+				return
+			})
 			m.MapState[i].StartedAt = newtask.StartedAt
 			m.MapState[i].Progress = "in-progress"
 			break
@@ -101,20 +102,25 @@ func (m *Master) AssignReduceTask(_ *string, reply *ReduceTask) error {
 	defer m.mu.Unlock()
 
 	var newtask ReduceTask
-	for taskNum, task := range m.ReduceState {
-		// currentTime := time.Now()
-		// if task.Progress == "in-progress" {
-		// 	if duration := task.StartedAt.Add(time.Duration(10) * time.Second); currentTime.After(duration) {
-		// 		// reset task progress
-		// 		m.ReduceState[taskNum].Progress = "idle"
-		// 	}
-		// }
+	for i, task := range m.ReduceState {
 		if task.Progress == "idle" {
-			newtask.TaskNum = taskNum
+			newtask.TaskNum = task.TaskNum
 			newtask.Progress = "in-progress"
 			newtask.StartedAt = time.Now()
-			m.ReduceState[taskNum].StartedAt = newtask.StartedAt
-			m.ReduceState[taskNum].Progress = "in-progress"
+
+			time.AfterFunc(10*time.Second, func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				if m.ReduceState[i].Progress == "in-progress" {
+					m.ReduceState[i].Progress = "idle"
+					log.Printf("[Master] Reassign task: %v\n", m.ReduceState[i].TaskNum)
+					return
+				}
+				return
+			})
+
+			m.ReduceState[i].StartedAt = newtask.StartedAt
+			m.ReduceState[i].Progress = "in-progress"
 			break
 		}
 	}
