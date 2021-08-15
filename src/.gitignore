@@ -7,3 +7,9 @@ mrtmp.*
 /kvpaxos/x.txt
 *.so
 tmp-*.txt
+mr-tmp/*
+mrmaster
+mrsequential
+mrworker
+.vscode
+.DS_Store
